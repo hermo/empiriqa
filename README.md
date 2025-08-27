@@ -9,10 +9,14 @@ Laboratory for pipeline construction with feedback.
 ## Overview
 
 *empiriqa* (command name is `epiq`) is a tool for interactively manipulating
-UNIX pipelines `|`. You can individually edit, add, delete, and toggle 
+UNIX pipelines `|`. You can individually edit, add, delete, and toggle
 disable/enable for each pipeline stage. It allows you to easily and
 efficiently experiment with data processing and analysis using commands.
 Additionally, you can execute commands with continuous output streams like `tail -f`.
+
+You can start with an empty editor or import an existing pipeline directly from
+the command line (e.g., `epiq 'ls -l | grep txt'`) to pre-populate the editor
+stages and begin experimenting immediately.
 
 *empiriqa* can be considered a generalization of tools like
 [*jnv*](https://github.com/ynqa/jnv) (interactive JSON filter using jq) and
@@ -50,7 +54,10 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/ynqa/empiriqa/releases/
 % epiq -h
 Laboratory for pipeline construction with feedback
 
-Usage: epiq [OPTIONS]
+Usage: epiq [OPTIONS] [PIPELINE]
+
+Arguments:
+  [PIPELINE]  Optional pipeline to import (e.g., 'ls -l | grep pattern')
 
 Options:
       --output-queue-size <OUTPUT_QUEUE_SIZE>
@@ -64,6 +71,20 @@ Options:
   -V, --version
           Print version
 ```
+
+## Pipeline Import
+
+You can import an existing pipeline by passing it as an argument when starting
+epiq.
+
+```bash
+epiq 'ls -l | grep txt'
+```
+
+This will create two editor stages that may then be manipulated in the UI:
+
+1. `ls -l`
+2. `grep txt`
 
 ## Keymap
 

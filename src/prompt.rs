@@ -326,22 +326,65 @@ pub struct Prompt {
 
 impl Prompt {
     pub fn spawn(
-        mut rx: broadcast::Receiver<EventStream>,
+        rx: broadcast::Receiver<EventStream>,
         notify_tx: mpsc::Sender<NotifyMessage>,
         themes: (EditorTheme, EditorTheme), // (head, pipe)
         init_terminal_shape: (u16, u16),
         shared_renderer: SharedRenderer,
     ) -> Self {
-        let (text_request_tx, mut text_request_rx) = mpsc::channel::<oneshot::Sender<Vec<String>>>(1);
-        let shared_editors = Arc::new(Mutex::new(EditorMap::from(text_editor::State {
-            prefix: themes.0.prefix.clone(),
-            prefix_style: StyleBuilder::new().fgc(themes.0.prefix_fg_color).build(),
-            active_char_style: StyleBuilder::new()
-                .bgc(themes.0.active_char_bg_color)
-                .build(),
-            word_break_chars: themes.0.word_break_chars.clone(),
-            ..Default::default()
-        })));
+        Self::spawn_with_commands(
+            rx,
+            notify_tx,
+            themes,
+            init_terminal_shape,
+            shared_renderer,
+            None,
+        )
+    }
+
+    pub fn spawn_with_pipeline(
+        rx: broadcast::Receiver<EventStream>,
+        notify_tx: mpsc::Sender<NotifyMessage>,
+        themes: (EditorTheme, EditorTheme), // (head, pipe)
+        init_terminal_shape: (u16, u16),
+        shared_renderer: SharedRenderer,
+        commands: Vec<String>,
+    ) -> Self {
+        Self::spawn_with_commands(
+            rx,
+            notify_tx,
+            themes,
+            init_terminal_shape,
+            shared_renderer,
+            Some(commands),
+        )
+    }
+
+    fn spawn_with_commands(
+        mut rx: broadcast::Receiver<EventStream>,
+        notify_tx: mpsc::Sender<NotifyMessage>,
+        themes: (EditorTheme, EditorTheme), // (head, pipe)
+        init_terminal_shape: (u16, u16),
+        shared_renderer: SharedRenderer,
+        commands: Option<Vec<String>>,
+    ) -> Self {
+        let (text_request_tx, mut text_request_rx) =
+            mpsc::channel::<oneshot::Sender<Vec<String>>>(1);
+
+        // Create initial editor map with commands if provided
+        let shared_editors = Arc::new(Mutex::new(if let Some(commands) = commands {
+            Self::create_editors_from_commands(commands, &themes)
+        } else {
+            EditorMap::from(text_editor::State {
+                prefix: themes.0.prefix.clone(),
+                prefix_style: StyleBuilder::new().fgc(themes.0.prefix_fg_color).build(),
+                active_char_style: StyleBuilder::new()
+                    .bgc(themes.0.active_char_bg_color)
+                    .build(),
+                word_break_chars: themes.0.word_break_chars.clone(),
+                ..Default::default()
+            })
+        }));
 
         let background = {
             let mut terminal_shape = init_terminal_shape;
@@ -612,6 +655,55 @@ impl Prompt {
                 .filter(|cmd| !cmd.trim().is_empty())
                 .collect()
         }
+    }
+
+    fn create_editors_from_commands(
+        commands: Vec<String>,
+        themes: &(EditorTheme, EditorTheme),
+    ) -> EditorMap {
+        use promkit::text_editor::TextEditor;
+
+        let mut editors = BTreeMap::new();
+
+        // Create head editor with first command (active)
+        if let Some(first_command) = commands.first() {
+            let head_editor = text_editor::State {
+                texteditor: TextEditor::new(first_command),
+                prefix: themes.0.prefix.clone(),
+                prefix_style: StyleBuilder::new().fgc(themes.0.prefix_fg_color).build(),
+                active_char_style: StyleBuilder::new()
+                    .bgc(themes.0.active_char_bg_color)
+                    .build(),
+                word_break_chars: themes.0.word_break_chars.clone(),
+                ..Default::default()
+            };
+            editors.insert(HEAD_INDEX.clone(), Editor::from(head_editor));
+        }
+
+        // Create pipe editors for remaining commands (inactive)
+        let mut current_index = HEAD_INDEX.clone();
+        for command in commands.iter().skip(1) {
+            let new_index = EditorIndex(current_index.0 + 1, current_index.1);
+            let mut pipe_editor = text_editor::State {
+                texteditor: TextEditor::new(command),
+                prefix: themes.1.prefix.clone(),
+                prefix_style: StyleBuilder::new().fgc(themes.1.prefix_fg_color).build(),
+                active_char_style: StyleBuilder::new().build(),
+                word_break_chars: themes.1.word_break_chars.clone(),
+                ..Default::default()
+            };
+            // Set all styles to dim for inactive editors
+            pipe_editor.prefix_style.attributes.set(Attribute::Dim);
+            pipe_editor.active_char_style.attributes.set(Attribute::Dim);
+            pipe_editor
+                .inactive_char_style
+                .attributes
+                .set(Attribute::Dim);
+            editors.insert(new_index.clone(), Editor::from(pipe_editor));
+            current_index = new_index;
+        }
+
+        EditorMap(editors)
     }
 
     fn insert_editor(

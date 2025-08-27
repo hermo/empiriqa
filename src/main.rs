@@ -30,6 +30,9 @@ use crate::{
 #[derive(Parser)]
 #[command(name = "epiq", version)]
 pub struct Args {
+    /// Optional pipeline to import (e.g., 'ls -l | grep pattern')
+    pipeline: Option<String>,
+
     #[arg(
         long,
         default_value = "1000",
@@ -63,6 +66,37 @@ pub struct Args {
                     but may cause screen flickering due to frequent rendering operations."
     )]
     output_render_interval: u64,
+}
+
+/// Parse a pipeline string into individual commands
+///
+/// Takes a pipeline string and splits it by `|` character, trims whitespace from each command,
+/// filters out empty commands, and returns a Vec<String> of valid commands.
+///
+/// # Arguments
+/// * `pipeline` - The pipeline string to parse (e.g., "ls -l | grep pattern")
+///
+/// # Returns
+/// * `Ok(Vec<String>)` - Vector of trimmed, non-empty commands
+/// * `Err(anyhow::Error)` - If no valid commands are found
+///
+/// # Examples
+/// ```
+/// let commands = parse_pipeline("ls -l | grep txt | head -5")?;
+/// assert_eq!(commands, vec!["ls -l", "grep txt", "head -5"]);
+/// ```
+fn parse_pipeline(pipeline: &str) -> anyhow::Result<Vec<String>> {
+    let commands: Vec<String> = pipeline
+        .split('|')
+        .map(|cmd| cmd.trim().to_string())
+        .filter(|cmd| !cmd.is_empty())
+        .collect();
+
+    if commands.is_empty() {
+        anyhow::bail!("No valid commands found in pipeline: '{}'", pipeline);
+    }
+
+    Ok(commands)
 }
 
 #[tokio::main]
@@ -111,29 +145,92 @@ async fn main() -> anyhow::Result<()> {
         .await
     });
 
-    let mut prompt = Prompt::spawn(
-        broadcast_event_tx.subscribe(),
-        notify_tx.clone(),
-        // TODO: Configurable theme
-        (
-            // Head theme
-            EditorTheme {
-                prefix: String::from("❯❯ "),
-                prefix_fg_color: Color::DarkGreen,
-                active_char_bg_color: Color::DarkCyan,
-                word_break_chars: HashSet::from(['.', '|', '(', ')', '[', ']']),
-            },
-            // Pipe theme
-            EditorTheme {
-                prefix: String::from("❚ "),
-                prefix_fg_color: Color::DarkYellow,
-                active_char_bg_color: Color::DarkCyan,
-                word_break_chars: HashSet::from(['.', '|', '(', ')', '[', ']']),
-            },
-        ),
-        crossterm::terminal::size()?,
-        shared_renderer.clone(),
-    );
+    let mut prompt = if let Some(ref pipeline_str) = args.pipeline {
+        match parse_pipeline(pipeline_str) {
+            Ok(commands) => {
+                Prompt::spawn_with_pipeline(
+                    broadcast_event_tx.subscribe(),
+                    notify_tx.clone(),
+                    // TODO: Configurable theme
+                    (
+                        // Head theme
+                        EditorTheme {
+                            prefix: String::from("❯❯ "),
+                            prefix_fg_color: Color::DarkGreen,
+                            active_char_bg_color: Color::DarkCyan,
+                            word_break_chars: HashSet::from(['.', '|', '(', ')', '[', ']']),
+                        },
+                        // Pipe theme
+                        EditorTheme {
+                            prefix: String::from("❚ "),
+                            prefix_fg_color: Color::DarkYellow,
+                            active_char_bg_color: Color::DarkCyan,
+                            word_break_chars: HashSet::from(['.', '|', '(', ')', '[', ']']),
+                        },
+                    ),
+                    crossterm::terminal::size()?,
+                    shared_renderer.clone(),
+                    commands,
+                )
+            }
+            Err(e) => {
+                // Show error and fall back to empty editor
+                let _ = notify_tx
+                    .send(NotifyMessage::Error(format!(
+                        "Failed to parse pipeline: {}",
+                        e
+                    )))
+                    .await;
+                Prompt::spawn(
+                    broadcast_event_tx.subscribe(),
+                    notify_tx.clone(),
+                    // TODO: Configurable theme
+                    (
+                        // Head theme
+                        EditorTheme {
+                            prefix: String::from("❯❯ "),
+                            prefix_fg_color: Color::DarkGreen,
+                            active_char_bg_color: Color::DarkCyan,
+                            word_break_chars: HashSet::from(['.', '|', '(', ')', '[', ']']),
+                        },
+                        // Pipe theme
+                        EditorTheme {
+                            prefix: String::from("❚ "),
+                            prefix_fg_color: Color::DarkYellow,
+                            active_char_bg_color: Color::DarkCyan,
+                            word_break_chars: HashSet::from(['.', '|', '(', ')', '[', ']']),
+                        },
+                    ),
+                    crossterm::terminal::size()?,
+                    shared_renderer.clone(),
+                )
+            }
+        }
+    } else {
+        Prompt::spawn(
+            broadcast_event_tx.subscribe(),
+            notify_tx.clone(),
+            // TODO: Configurable theme
+            (
+                // Head theme
+                EditorTheme {
+                    prefix: String::from("❯❯ "),
+                    prefix_fg_color: Color::DarkGreen,
+                    active_char_bg_color: Color::DarkCyan,
+                    word_break_chars: HashSet::from(['.', '|', '(', ')', '[', ']']),
+                },
+                // Pipe theme
+                EditorTheme {
+                    prefix: String::from("❚ "),
+                    prefix_fg_color: Color::DarkYellow,
+                    active_char_bg_color: Color::DarkCyan,
+                    word_break_chars: HashSet::from(['.', '|', '(', ')', '[', ']']),
+                },
+            ),
+            crossterm::terminal::size()?,
+            shared_renderer.clone(),
+        )
+    };
 
     'outer: while let Some(events) = event_rx.recv().await {
         for event in events {
@@ -179,11 +276,20 @@ async fn main() -> anyhow::Result<()> {
                                 let _ = notify_tx.send(message).await;
                             }
                             Err(e) => {
-                                let _ = notify_tx.send(NotifyMessage::Error(format!("Failed to get output text: {:?}", e))).await;
+                                let _ = notify_tx
+                                    .send(NotifyMessage::Error(format!(
+                                        "Failed to get output text: {:?}",
+                                        e
+                                    )))
+                                    .await;
                             }
                         }
                     } else {
-                        let _ = notify_tx.send(NotifyMessage::Error("Failed to request output text".to_string())).await;
+                        let _ = notify_tx
+                            .send(NotifyMessage::Error(
+                                "Failed to request output text".to_string(),
+                            ))
+                            .await;
                     }
                 }
                 // There is no way to capture ONLY mouse scroll events,
