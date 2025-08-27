@@ -80,27 +80,7 @@ impl EventOperator {
                             let _ = tx.send(Self::operate(buf.drain(..))).await;
                         },
                         Some(Ok(event)) = event_stream.next() => {
-                            // Check if this is a clipboard shortcut that should be processed immediately
-                            let is_clipboard_shortcut = matches!(event,
-                                crossterm::event::Event::Key(KeyEvent {
-                                    code: KeyCode::Char('q'),
-                                    modifiers: KeyModifiers::CONTROL,
-                                    kind: KeyEventKind::Press,
-                                    state: KeyEventState::NONE,
-                                }) | crossterm::event::Event::Key(KeyEvent {
-                                    code: KeyCode::Char('o'),
-                                    modifiers: KeyModifiers::CONTROL,
-                                    kind: KeyEventKind::Press,
-                                    state: KeyEventState::NONE,
-                                })
-                            );
-
                             buf.push(event);
-
-                            // If it's a clipboard shortcut, process the buffer immediately
-                            if is_clipboard_shortcut {
-                                let _ = tx.send(Self::operate(buf.drain(..))).await;
-                            }
                         },
                     }
                 }

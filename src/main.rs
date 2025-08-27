@@ -158,13 +158,8 @@ async fn main() -> anyhow::Result<()> {
                     _,
                 )) => {
                     let pipeline_text = prompt.get_all_texts().await.join(" | ");
-                    // Debug: Check if pipeline text is empty
-                    if pipeline_text.trim().is_empty() {
-                        let _ = notify_tx.send(NotifyMessage::Error("Pipeline is empty".to_string())).await;
-                    } else {
-                        let message = clipboard::copy_to_clipboard(&pipeline_text);
-                        let _ = notify_tx.send(message).await;
-                    }
+                    let message = clipboard::copy_pipeline_to_clipboard(&pipeline_text);
+                    let _ = notify_tx.send(message).await;
                 }
                 // Ctrl+O: Copy output queue text to clipboard
                 EventStream::Buffer(Buffer::Other(
@@ -180,13 +175,8 @@ async fn main() -> anyhow::Result<()> {
                     if let Ok(_) = oneshot_tx.send(response_tx).await {
                         match response_rx.await {
                             Ok(output_text) => {
-                                // Debug: Check if output text is empty
-                                if output_text.trim().is_empty() {
-                                    let _ = notify_tx.send(NotifyMessage::Error("Output queue is empty".to_string())).await;
-                                } else {
-                                    let message = clipboard::copy_to_clipboard(&output_text);
-                                    let _ = notify_tx.send(message).await;
-                                }
+                                let message = clipboard::copy_output_to_clipboard(&output_text);
+                                let _ = notify_tx.send(message).await;
                             }
                             Err(e) => {
                                 let _ = notify_tx.send(NotifyMessage::Error(format!("Failed to get output text: {:?}", e))).await;
