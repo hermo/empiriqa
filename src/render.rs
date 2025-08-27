@@ -46,6 +46,7 @@ impl EditorIndex {
 pub enum NotifyMessage {
     None,
     Error(String),
+    Success(String),
 }
 
 impl From<NotifyMessage> for text::State {
@@ -56,6 +57,14 @@ impl From<NotifyMessage> for text::State {
                 text: text::Text::from(message),
                 style: StyleBuilder::new()
                     .fgc(Color::DarkRed)
+                    .attrs(Attributes::from(Attribute::Bold))
+                    .build(),
+                ..Default::default()
+            },
+            NotifyMessage::Success(message) => text::State {
+                text: text::Text::from(message),
+                style: StyleBuilder::new()
+                    .fgc(Color::DarkGreen)
                     .attrs(Attributes::from(Attribute::Bold))
                     .build(),
                 ..Default::default()

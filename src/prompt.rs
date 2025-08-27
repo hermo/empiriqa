@@ -11,7 +11,7 @@ use crossterm::{
 };
 use promkit::{PaneFactory, pane::Pane, style::StyleBuilder, text_editor};
 use tokio::{
-    sync::{Mutex, broadcast, mpsc},
+    sync::{Mutex, broadcast, mpsc, oneshot},
     task::JoinHandle,
 };
 
@@ -321,6 +321,7 @@ pub struct Prompt {
     // TODO: reconsider whether mutex is necessary only for get_all_texts
     shared_editors: Arc<Mutex<EditorMap>>,
     pub background: JoinHandle<()>,
+    text_request_tx: mpsc::Sender<oneshot::Sender<Vec<String>>>,
 }
 
 impl Prompt {
@@ -331,6 +332,7 @@ impl Prompt {
         init_terminal_shape: (u16, u16),
         shared_renderer: SharedRenderer,
     ) -> Self {
+        let (text_request_tx, mut text_request_rx) = mpsc::channel::<oneshot::Sender<Vec<String>>>(1);
         let shared_editors = Arc::new(Mutex::new(EditorMap::from(text_editor::State {
             prefix: themes.0.prefix.clone(),
             prefix_style: StyleBuilder::new().fgc(themes.0.prefix_fg_color).build(),
@@ -364,7 +366,8 @@ impl Prompt {
                 }
 
                 loop {
-                    if let Ok(event) = rx.recv().await {
+                    tokio::select! {
+                        Ok(event) = rx.recv() => {
                         match event {
                             EventStream::Debounce(Debounce::Resize(width, height)) => {
                                 terminal_shape = (width, height);
@@ -571,6 +574,17 @@ impl Prompt {
                         };
 
                         let _ = shared_renderer.lock().await.render();
+                        },
+                        Some(response_tx) = text_request_rx.recv() => {
+                            let editors = shared_editors.lock().await;
+                            let texts = editors
+                                .values()
+                                .filter(|editor| !editor.ignore)
+                                .map(|editor| editor.state.texteditor.text_without_cursor().to_string())
+                                .filter(|cmd| !cmd.trim().is_empty())
+                                .collect();
+                            let _ = response_tx.send(texts);
+                        }
                     }
                 }
             })
@@ -579,18 +593,25 @@ impl Prompt {
         Self {
             shared_editors,
             background,
+            text_request_tx,
         }
     }
 
     pub async fn get_all_texts(&mut self) -> Vec<String> {
-        self.shared_editors
-            .lock()
-            .await
-            .values()
-            .filter(|editor| !editor.ignore)
-            .map(|editor| editor.state.texteditor.text_without_cursor().to_string())
-            .filter(|cmd| !cmd.trim().is_empty())
-            .collect()
+        let (response_tx, response_rx) = oneshot::channel();
+        if let Ok(_) = self.text_request_tx.send(response_tx).await {
+            response_rx.await.unwrap_or_default()
+        } else {
+            // Fallback to direct access if channel fails
+            self.shared_editors
+                .lock()
+                .await
+                .values()
+                .filter(|editor| !editor.ignore)
+                .map(|editor| editor.state.texteditor.text_without_cursor().to_string())
+                .filter(|cmd| !cmd.trim().is_empty())
+                .collect()
+        }
     }
 
     fn insert_editor(

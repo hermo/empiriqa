@@ -8,8 +8,9 @@ use crossterm::{
     style::Color,
 };
 use promkit::{PaneFactory, grapheme::StyledGraphemes, text};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 
+mod clipboard;
 mod operator;
 mod pipeline;
 mod prompt;
@@ -93,6 +94,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let (output_tx, output_rx) = mpsc::channel(1);
+    let (oneshot_tx, oneshot_rx) = mpsc::channel::<oneshot::Sender<String>>(1);
     let output_renderer = shared_renderer.clone();
     let output_event_subscriber = broadcast_event_tx.subscribe();
     let output_reset_subscriber = broadcast_reset_tx.subscribe();
@@ -100,6 +102,7 @@ async fn main() -> anyhow::Result<()> {
         output_stream(
             queue::State::new(args.output_queue_size),
             output_rx,
+            oneshot_rx,
             output_event_subscriber,
             output_reset_subscriber,
             output_renderer,
@@ -144,6 +147,55 @@ async fn main() -> anyhow::Result<()> {
                     }),
                     _,
                 )) => break 'outer,
+                // Ctrl+Q: Copy pipeline text to clipboard
+                EventStream::Buffer(Buffer::Other(
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char('q'),
+                        modifiers: KeyModifiers::CONTROL,
+                        kind: KeyEventKind::Press,
+                        state: KeyEventState::NONE,
+                    }),
+                    _,
+                )) => {
+                    let pipeline_text = prompt.get_all_texts().await.join(" | ");
+                    // Debug: Check if pipeline text is empty
+                    if pipeline_text.trim().is_empty() {
+                        let _ = notify_tx.send(NotifyMessage::Error("Pipeline is empty".to_string())).await;
+                    } else {
+                        let message = clipboard::copy_to_clipboard(&pipeline_text);
+                        let _ = notify_tx.send(message).await;
+                    }
+                }
+                // Ctrl+O: Copy output queue text to clipboard
+                EventStream::Buffer(Buffer::Other(
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char('o'),
+                        modifiers: KeyModifiers::CONTROL,
+                        kind: KeyEventKind::Press,
+                        state: KeyEventState::NONE,
+                    }),
+                    _,
+                )) => {
+                    let (response_tx, response_rx) = oneshot::channel();
+                    if let Ok(_) = oneshot_tx.send(response_tx).await {
+                        match response_rx.await {
+                            Ok(output_text) => {
+                                // Debug: Check if output text is empty
+                                if output_text.trim().is_empty() {
+                                    let _ = notify_tx.send(NotifyMessage::Error("Output queue is empty".to_string())).await;
+                                } else {
+                                    let message = clipboard::copy_to_clipboard(&output_text);
+                                    let _ = notify_tx.send(message).await;
+                                }
+                            }
+                            Err(e) => {
+                                let _ = notify_tx.send(NotifyMessage::Error(format!("Failed to get output text: {:?}", e))).await;
+                            }
+                        }
+                    } else {
+                        let _ = notify_tx.send(NotifyMessage::Error("Failed to request output text".to_string())).await;
+                    }
+                }
                 // There is no way to capture ONLY mouse scroll events,
                 // so, toggle enabling and disabling of capturing all mouse events with Esc.
                 // https://github.com/crossterm-rs/crossterm/issues/640
@@ -245,6 +297,7 @@ async fn notify_stream(
 async fn output_stream(
     mut queue: queue::State,
     mut stdout_stream: mpsc::Receiver<String>,
+    mut oneshot_stream: mpsc::Receiver<oneshot::Sender<String>>,
     mut event_stream: broadcast::Receiver<EventStream>,
     mut reset: broadcast::Receiver<()>,
     shared_renderer: SharedRenderer,
@@ -281,6 +334,10 @@ async fn output_stream(
                 if shifted {
                     last_modified_time = Local::now();
                 }
+            },
+            Some(response_tx) = oneshot_stream.recv() => {
+                let output_text = queue.get_all_text();
+                let _ = response_tx.send(output_text);
             },
             maybe_line = stdout_stream.recv() => {
                 match maybe_line {

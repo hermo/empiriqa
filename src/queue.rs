@@ -53,6 +53,20 @@ impl State {
     pub fn shift(&mut self, up: usize, down: usize) -> bool {
         self.queue.buf.shift(up, down)
     }
+
+    pub fn get_all_text(&self) -> String {
+        self.queue
+            .buf
+            .contents()
+            .iter()
+            .map(|styled_graphemes| {
+                let text = styled_graphemes.to_string();
+                // Handle null characters used for empty lines
+                if text == "\0" { String::new() } else { text }
+            })
+            .collect::<Vec<String>>()
+            .join("\n")
+    }
 }
 
 impl PaneFactory for State {

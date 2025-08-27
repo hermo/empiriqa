@@ -75,6 +75,8 @@ Options:
 | `Ctrl+B`    | Add new pipeline stage        |
 | `Ctrl+D`    | Delete current pipeline stage |
 | `Ctrl+X`    | Disable/Enable current stage  |
+| `Ctrl+Q`    | Copy pipeline commands        |
+| `Ctrl+O`    | Copy output to clipboard      |
 | `↑`/`↓`     | Move between stages           |
 | `←`/`→`     | Move cursor left/right        |
 | `Ctrl+A`    | Move to beginning of line     |
@@ -128,6 +130,18 @@ testing.
 
 Disabled stages are displayed with a strikethrough, making them visually
 distinguishable.
+
+### Ctrl+Q/Ctrl+O: Clipboard functionality
+
+The current pipeline or reseult may be copied to system for further use.
+
+**Ctrl+Q (Copy Pipeline)**: Copies the current pipeline commands as raw text
+joined with " | " (e.g., "ls -la | grep .txt"). This allows you to easily share
+or save your pipeline configurations.
+
+**Ctrl+O (Copy Output)**: Copies all output currently stored in the queue
+to the clipboard as plain text. Useful for saving results or sharing command
+output.
 
 ### Behavior when resizing
 
