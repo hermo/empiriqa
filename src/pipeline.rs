@@ -7,6 +7,37 @@ use tokio::{
     task::JoinHandle,
 };
 
+/// Parse a pipeline string into individual commands
+///
+/// Takes a pipeline string and splits it by `|` character, trims whitespace from each command,
+/// filters out empty commands, and returns a Vec<String> of valid commands.
+///
+/// # Arguments
+/// * `pipeline` - The pipeline string to parse (e.g., "ls -l | grep pattern")
+///
+/// # Returns
+/// * `Ok(Vec<String>)` - Vector of trimmed, non-empty commands
+/// * `Err(anyhow::Error)` - If no valid commands are found
+///
+/// # Examples
+/// ```
+/// let commands = parse_pipeline("ls -l | grep txt | head -5")?;
+/// assert_eq!(commands, vec!["ls -l", "grep txt", "head -5"]);
+/// ```
+pub fn parse_pipeline(pipeline: &str) -> anyhow::Result<Vec<String>> {
+    let commands: Vec<String> = pipeline
+        .split('|')
+        .map(|cmd| cmd.trim().to_string())
+        .filter(|cmd| !cmd.is_empty())
+        .collect();
+
+    if commands.is_empty() {
+        anyhow::bail!("No valid commands found in pipeline: '{}'", pipeline);
+    }
+
+    Ok(commands)
+}
+
 pub trait StageKind {}
 
 pub struct Head;

@@ -1,11 +1,10 @@
-use std::{collections::HashSet, time::Duration};
+use std::time::Duration;
 
 use chrono::Local;
 use clap::Parser;
 use crossterm::{
     self,
     event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers},
-    style::Color,
 };
 use promkit::{PaneFactory, grapheme::StyledGraphemes, text};
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -14,15 +13,14 @@ mod clipboard;
 mod operator;
 mod pipeline;
 mod prompt;
-use prompt::EditorTheme;
 mod queue;
 mod render;
 use render::NotifyMessage;
 
 use crate::{
     operator::{Buffer, EventOperator, EventStream},
-    pipeline::Pipeline,
-    prompt::Prompt,
+    pipeline::{Pipeline, parse_pipeline},
+    prompt::{Prompt, EditorTheme},
     render::{PaneIndex, SharedRenderer},
 };
 
@@ -68,36 +66,6 @@ pub struct Args {
     output_render_interval: u64,
 }
 
-/// Parse a pipeline string into individual commands
-///
-/// Takes a pipeline string and splits it by `|` character, trims whitespace from each command,
-/// filters out empty commands, and returns a Vec<String> of valid commands.
-///
-/// # Arguments
-/// * `pipeline` - The pipeline string to parse (e.g., "ls -l | grep pattern")
-///
-/// # Returns
-/// * `Ok(Vec<String>)` - Vector of trimmed, non-empty commands
-/// * `Err(anyhow::Error)` - If no valid commands are found
-///
-/// # Examples
-/// ```
-/// let commands = parse_pipeline("ls -l | grep txt | head -5")?;
-/// assert_eq!(commands, vec!["ls -l", "grep txt", "head -5"]);
-/// ```
-fn parse_pipeline(pipeline: &str) -> anyhow::Result<Vec<String>> {
-    let commands: Vec<String> = pipeline
-        .split('|')
-        .map(|cmd| cmd.trim().to_string())
-        .filter(|cmd| !cmd.is_empty())
-        .collect();
-
-    if commands.is_empty() {
-        anyhow::bail!("No valid commands found in pipeline: '{}'", pipeline);
-    }
-
-    Ok(commands)
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -145,91 +113,38 @@ async fn main() -> anyhow::Result<()> {
         .await
     });
 
-    let mut prompt = if let Some(ref pipeline_str) = args.pipeline {
-        match parse_pipeline(pipeline_str) {
-            Ok(commands) => {
-                Prompt::spawn_with_pipeline(
-                    broadcast_event_tx.subscribe(),
-                    notify_tx.clone(),
-                    // TODO: Configurable theme
-                    (
-                        // Head theme
-                        EditorTheme {
-                            prefix: String::from("❯❯ "),
-                            prefix_fg_color: Color::DarkGreen,
-                            active_char_bg_color: Color::DarkCyan,
-                            word_break_chars: HashSet::from(['.', '|', '(', ')', '[', ']']),
-                        },
-                        // Pipe theme
-                        EditorTheme {
-                            prefix: String::from("❚ "),
-                            prefix_fg_color: Color::DarkYellow,
-                            active_char_bg_color: Color::DarkCyan,
-                            word_break_chars: HashSet::from(['.', '|', '(', ')', '[', ']']),
-                        },
-                    ),
-                    crossterm::terminal::size()?,
-                    shared_renderer.clone(),
-                    commands,
-                )
-            }
-            Err(e) => {
-                // Show error and fall back to empty editor
-                let _ = notify_tx
-                    .send(NotifyMessage::Error(format!(
-                        "Failed to parse pipeline: {}",
-                        e
-                    )))
-                    .await;
-                Prompt::spawn(
-                    broadcast_event_tx.subscribe(),
-                    notify_tx.clone(),
-                    // TODO: Configurable theme
-                    (
-                        // Head theme
-                        EditorTheme {
-                            prefix: String::from("❯❯ "),
-                            prefix_fg_color: Color::DarkGreen,
-                            active_char_bg_color: Color::DarkCyan,
-                            word_break_chars: HashSet::from(['.', '|', '(', ')', '[', ']']),
-                        },
-                        // Pipe theme
-                        EditorTheme {
-                            prefix: String::from("❚ "),
-                            prefix_fg_color: Color::DarkYellow,
-                            active_char_bg_color: Color::DarkCyan,
-                            word_break_chars: HashSet::from(['.', '|', '(', ')', '[', ']']),
-                        },
-                    ),
-                    crossterm::terminal::size()?,
-                    shared_renderer.clone(),
-                )
-            }
-        }
-    } else {
-        Prompt::spawn(
+    let mut prompt = match args.pipeline.as_deref().map(parse_pipeline) {
+        Some(Ok(commands)) => Prompt::spawn_with_pipeline(
             broadcast_event_tx.subscribe(),
             notify_tx.clone(),
-            // TODO: Configurable theme
-            (
-                // Head theme
-                EditorTheme {
-                    prefix: String::from("❯❯ "),
-                    prefix_fg_color: Color::DarkGreen,
-                    active_char_bg_color: Color::DarkCyan,
-                    word_break_chars: HashSet::from(['.', '|', '(', ')', '[', ']']),
-                },
-                // Pipe theme
-                EditorTheme {
-                    prefix: String::from("❚ "),
-                    prefix_fg_color: Color::DarkYellow,
-                    active_char_bg_color: Color::DarkCyan,
-                    word_break_chars: HashSet::from(['.', '|', '(', ')', '[', ']']),
-                },
-            ),
+            EditorTheme::default_themes(),
             crossterm::terminal::size()?,
             shared_renderer.clone(),
-        )
+            commands,
+        ),
+        Some(Err(e)) => {
+            // Show error and fall back to empty editor
+            let _ = notify_tx
+                .send(NotifyMessage::Error(format!(
+                    "Failed to parse pipeline: {}",
+                    e
+                )))
+                .await;
+            Prompt::spawn(
+                broadcast_event_tx.subscribe(),
+                notify_tx.clone(),
+                EditorTheme::default_themes(),
+                crossterm::terminal::size()?,
+                shared_renderer.clone(),
+            )
+        }
+        None => Prompt::spawn(
+            broadcast_event_tx.subscribe(),
+            notify_tx.clone(),
+            EditorTheme::default_themes(),
+            crossterm::terminal::size()?,
+            shared_renderer.clone(),
+        ),
     };
 
     'outer: while let Some(events) = event_rx.recv().await {

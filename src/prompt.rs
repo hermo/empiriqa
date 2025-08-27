@@ -157,6 +157,28 @@ pub struct EditorTheme {
     pub word_break_chars: HashSet<char>,
 }
 
+impl EditorTheme {
+    /// Create default editor themes for head and pipe editors
+    pub fn default_themes() -> (EditorTheme, EditorTheme) {
+        (
+            // Head theme
+            EditorTheme {
+                prefix: String::from("❯❯ "),
+                prefix_fg_color: Color::DarkGreen,
+                active_char_bg_color: Color::DarkCyan,
+                word_break_chars: HashSet::from(['.', '|', '(', ')', '[', ']']),
+            },
+            // Pipe theme
+            EditorTheme {
+                prefix: String::from("❚ "),
+                prefix_fg_color: Color::DarkYellow,
+                active_char_bg_color: Color::DarkCyan,
+                word_break_chars: HashSet::from(['.', '|', '(', ')', '[', ']']),
+            },
+        )
+    }
+}
+
 struct Editor {
     state: text_editor::State,
     ignore: bool,
