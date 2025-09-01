@@ -9,11 +9,11 @@ use tokio::{
 
 /// Parse a pipeline string into individual commands
 ///
-/// Takes a pipeline string and splits it by `|` character, trims whitespace from each command,
-/// filters out empty commands, and returns a Vec<String> of valid commands.
+/// Takes a pipeline string and splits it by `|` characters that are not inside quotes,
+/// trims whitespace from each command, filters out empty commands, and returns a Vec<String> of valid commands.
 ///
 /// # Arguments
-/// * `pipeline` - The pipeline string to parse (e.g., "ls -l | grep pattern")
+/// * `pipeline` - The pipeline string to parse (e.g., "ls -l | grep pattern" or "echo 'a|b' | cat")
 ///
 /// # Returns
 /// * `Ok(Vec<String>)` - Vector of trimmed, non-empty commands
@@ -23,19 +23,151 @@ use tokio::{
 /// ```
 /// let commands = parse_pipeline("ls -l | grep txt | head -5")?;
 /// assert_eq!(commands, vec!["ls -l", "grep txt", "head -5"]);
+///
+/// let commands = parse_pipeline("echo 'a|b' | cat")?;
+/// assert_eq!(commands, vec!["echo 'a|b'", "cat"]);
 /// ```
 pub fn parse_pipeline(pipeline: &str) -> anyhow::Result<Vec<String>> {
-    let commands: Vec<String> = pipeline
-        .split('|')
-        .map(|cmd| cmd.trim().to_string())
-        .filter(|cmd| !cmd.is_empty())
-        .collect();
+    let commands = split_pipeline_with_quotes(pipeline)?;
 
     if commands.is_empty() {
         anyhow::bail!("No valid commands found in pipeline: '{}'", pipeline);
     }
 
     Ok(commands)
+}
+
+/// Split a pipeline string by pipe characters, respecting quoted sections
+fn split_pipeline_with_quotes(pipeline: &str) -> anyhow::Result<Vec<String>> {
+    let mut commands = Vec::new();
+    let mut current_command = String::new();
+    let chars = pipeline.chars();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escape_next = false;
+
+    for ch in chars {
+        if escape_next {
+            current_command.push(ch);
+            escape_next = false;
+            continue;
+        }
+
+        match ch {
+            '\\' => {
+                current_command.push(ch);
+                escape_next = true;
+            }
+            '\'' if !in_double_quote => {
+                current_command.push(ch);
+                in_single_quote = !in_single_quote;
+            }
+            '"' if !in_single_quote => {
+                current_command.push(ch);
+                in_double_quote = !in_double_quote;
+            }
+            '|' if !in_single_quote && !in_double_quote => {
+                let trimmed = current_command.trim().to_string();
+                if !trimmed.is_empty() {
+                    commands.push(trimmed);
+                }
+                current_command.clear();
+            }
+            _ => {
+                current_command.push(ch);
+            }
+        }
+    }
+
+    let trimmed = current_command.trim().to_string();
+    if !trimmed.is_empty() {
+        commands.push(trimmed);
+    }
+
+    if in_single_quote || in_double_quote {
+        anyhow::bail!("Unclosed quote in pipeline: '{}'", pipeline);
+    }
+
+    Ok(commands)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_simple_pipeline() {
+        let result = parse_pipeline("ls -l | grep txt").unwrap();
+        assert_eq!(result, vec!["ls -l", "grep txt"]);
+    }
+
+    #[test]
+    fn test_quoted_pipe_single_quotes() {
+        let result = parse_pipeline("echo '[]' | jq '. | length'").unwrap();
+        assert_eq!(result, vec!["echo '[]'", "jq '. | length'"]);
+    }
+
+    #[test]
+    fn test_quoted_pipe_double_quotes() {
+        let result = parse_pipeline(r#"echo "test|value" | grep test"#).unwrap();
+        assert_eq!(result, vec![r#"echo "test|value""#, "grep test"]);
+    }
+
+    #[test]
+    fn test_multiple_pipes() {
+        let result = parse_pipeline("echo hello | cat | wc -l").unwrap();
+        assert_eq!(result, vec!["echo hello", "cat", "wc -l"]);
+    }
+
+    #[test]
+    fn test_multiple_quoted_pipes() {
+        let result = parse_pipeline(r#"echo 'a|b|c' | tr '|' '\n'"#).unwrap();
+        assert_eq!(result, vec!["echo 'a|b|c'", r#"tr '|' '\n'"#]);
+    }
+
+    #[test]
+    fn test_escaped_quotes() {
+        let result = parse_pipeline(r#"echo 'it'\''s a test' | cat"#).unwrap();
+        assert_eq!(result, vec![r#"echo 'it'\''s a test'"#, "cat"]);
+    }
+
+    #[test]
+    fn test_unclosed_single_quote() {
+        let result = parse_pipeline("echo 'unclosed | cat");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unclosed quote"));
+    }
+
+    #[test]
+    fn test_unclosed_double_quote() {
+        let result = parse_pipeline(r#"echo "unclosed | cat"#);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unclosed quote"));
+    }
+
+    #[test]
+    fn test_empty_pipeline() {
+        let result = parse_pipeline("");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No valid commands found")
+        );
+    }
+
+    #[test]
+    fn test_only_pipes() {
+        let result = parse_pipeline("|||");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No valid commands found")
+        );
+    }
 }
 
 pub trait StageKind {}
